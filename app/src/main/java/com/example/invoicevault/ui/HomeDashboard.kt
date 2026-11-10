@@ -15,6 +15,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -23,6 +24,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
@@ -30,6 +32,8 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.compose.ui.platform.LocalContext
+import com.example.invoicevault.InvoiceVaultApp
 import com.example.invoicevault.data.Product
 import com.example.invoicevault.data.ProductRepository
 import kotlinx.coroutines.flow.SharingStarted
@@ -38,20 +42,39 @@ import kotlinx.coroutines.launch
 
 @Composable
 fun HomeDashboard(repository: ProductRepository) {
+    val context = LocalContext.current
+    val app = context.applicationContext as InvoiceVaultApp
+    val invoiceRepo = app.invoiceRepository
+
     val vm: DashboardViewModel = viewModel(factory = DashboardViewModel.factory(repository))
     val products by vm.products.collectAsState()
     val count by vm.count.collectAsState()
+    val invoiceCount by invoiceRepo.totalInvoiceCount.collectAsState(initial = 0)
+    val coroutineScope = rememberCoroutineScope()
+
     var showAddProduct by remember { mutableStateOf(false) }
     var editingProduct by remember { mutableStateOf<Product?>(null) }
     var deletingProduct by remember { mutableStateOf<Product?>(null) }
+    var managingInvoicesProduct by remember { mutableStateOf<Product?>(null) }
+    var showUploadInvoiceDialog by remember { mutableStateOf(false) }
+
     Column(Modifier.fillMaxSize().padding(20.dp)) {
         Text("Invoice Vault", style = MaterialTheme.typography.headlineMedium)
         Text("Your purchases, invoices and warranties in one place", style = MaterialTheme.typography.bodyMedium)
         Spacer(Modifier.height(12.dp))
-        Button(onClick = { showAddProduct = true }) { Text("Add product") }
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Button(onClick = { showAddProduct = true }) { Text("Add product") }
+            OutlinedButton(
+                onClick = { showUploadInvoiceDialog = true },
+                enabled = products.isNotEmpty()
+            ) {
+                Text("Upload invoice")
+            }
+        }
         Spacer(Modifier.height(20.dp))
-        Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.fillMaxWidth()) {
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
             SummaryCard("Products", count.toString(), Modifier.weight(1f))
+            SummaryCard("Invoices", invoiceCount.toString(), Modifier.weight(1f))
             SummaryCard("Warranties", "Coming soon", Modifier.weight(1f))
         }
         Spacer(Modifier.height(24.dp))
@@ -62,7 +85,12 @@ fun HomeDashboard(repository: ProductRepository) {
         } else {
             LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 items(products, key = { it.productId }) { product ->
-                    ProductRow(product, onEdit = { editingProduct = product }, onDelete = { deletingProduct = product })
+                    ProductRow(
+                        product = product,
+                        onEdit = { editingProduct = product },
+                        onDelete = { deletingProduct = product },
+                        onManageInvoices = { managingInvoicesProduct = product }
+                    )
                 }
             }
         }
@@ -83,11 +111,31 @@ fun HomeDashboard(repository: ProductRepository) {
         AlertDialog(
             onDismissRequest = { deletingProduct = null },
             title = { Text("Delete product?") },
-            text = { Text("${product.productName} will be removed from your product vault.") },
+            text = { Text("${product.productName} and all associated invoices will be removed.") },
             confirmButton = {
                 TextButton(onClick = { vm.deleteProduct(product); deletingProduct = null }) { Text("Delete") }
             },
             dismissButton = { TextButton(onClick = { deletingProduct = null }) { Text("Cancel") } },
+        )
+    }
+
+    managingInvoicesProduct?.let { product ->
+        ProductInvoicesDialog(
+            product = product,
+            onDismiss = { managingInvoicesProduct = null }
+        )
+    }
+
+    if (showUploadInvoiceDialog) {
+        InvoiceUploadDialog(
+            availableProducts = products,
+            onDismiss = { showUploadInvoiceDialog = false },
+            onSaveSuccess = { newInvoice ->
+                coroutineScope.launch {
+                    invoiceRepo.addInvoice(newInvoice)
+                    showUploadInvoiceDialog = false
+                }
+            }
         )
     }
 }
@@ -142,13 +190,19 @@ private fun SummaryCard(title: String, value: String, modifier: Modifier = Modif
 }
 
 @Composable
-private fun ProductRow(product: Product, onEdit: () -> Unit, onDelete: () -> Unit) {
+private fun ProductRow(
+    product: Product,
+    onEdit: () -> Unit,
+    onDelete: () -> Unit,
+    onManageInvoices: () -> Unit
+) {
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp)) {
             Text(product.productName, style = MaterialTheme.typography.titleMedium)
             Text("${product.brand} · ${product.category}", style = MaterialTheme.typography.bodyMedium)
             Text("Purchased ${product.purchaseDate} · ${product.purchasePrice}", style = MaterialTheme.typography.bodySmall)
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                TextButton(onClick = onManageInvoices) { Text("Invoices") }
                 TextButton(onClick = onEdit) { Text("Edit") }
                 TextButton(onClick = onDelete) { Text("Delete") }
             }
