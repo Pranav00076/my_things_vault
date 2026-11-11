@@ -30,6 +30,7 @@ import com.example.invoicevault.ocr.ExtractedInvoiceData
 import com.example.invoicevault.ocr.InvoiceOcrProcessor
 import kotlinx.coroutines.launch
 import java.io.File
+import java.time.LocalDate
 
 /**
  * Dialog for uploading a new invoice or replacing an existing invoice document.
@@ -77,6 +78,35 @@ fun InvoiceUploadDialog(
     var isSaving by remember { mutableStateOf(false) }
     var isScanningOcr by remember { mutableStateOf(false) }
     var pendingOcrReview by remember { mutableStateOf<ExtractedInvoiceData?>(null) }
+    var potentialDuplicate by remember { mutableStateOf<Invoice?>(null) }
+    var pendingDuplicateAction by remember { mutableStateOf<(suspend () -> Unit)?>(null) }
+
+    val purchaseDateIsValid = remember(purchaseDate) {
+        runCatching { LocalDate.parse(purchaseDate.trim()) }.isSuccess
+    }
+    val amountIsValid = remember(totalAmount) {
+        totalAmount.toDoubleOrNull()?.let { it.isFinite() && it >= 0.0 } == true
+    }
+
+    fun saveAfterDuplicateCheck(invoice: Invoice, proceed: suspend () -> Unit) {
+        if (isSaving || potentialDuplicate != null) return
+        scope.launch {
+            isSaving = true
+            try {
+                val duplicate = app.invoiceRepository.findPotentialDuplicate(invoice)
+                if (duplicate != null) {
+                    potentialDuplicate = duplicate
+                    pendingDuplicateAction = proceed
+                } else {
+                    proceed()
+                }
+            } catch (error: Exception) {
+                Toast.makeText(context, "Unable to check for duplicate: ${error.message}", Toast.LENGTH_LONG).show()
+            } finally {
+                isSaving = false
+            }
+        }
+    }
 
     // Temporary camera capture state
     var tempCameraFile by remember { mutableStateOf<File?>(null) }
@@ -338,6 +368,12 @@ fun InvoiceUploadDialog(
                     value = purchaseDate,
                     onValueChange = { purchaseDate = it },
                     label = { Text("Purchase Date (yyyy-MM-dd) *") },
+                    isError = purchaseDate.isNotBlank() && !purchaseDateIsValid,
+                    supportingText = {
+                        if (purchaseDate.isNotBlank() && !purchaseDateIsValid) {
+                            Text("Enter a real date in yyyy-MM-dd format", color = MaterialTheme.colorScheme.error)
+                        }
+                    },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()
                 )
@@ -356,6 +392,12 @@ fun InvoiceUploadDialog(
                     value = totalAmount,
                     onValueChange = { totalAmount = it },
                     label = { Text("Total Amount *") },
+                    isError = totalAmount.isNotBlank() && !amountIsValid,
+                    supportingText = {
+                        if (totalAmount.isNotBlank() && !amountIsValid) {
+                            Text("Enter an amount greater than or equal to zero", color = MaterialTheme.colorScheme.error)
+                        }
+                    },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()
                 )
@@ -408,34 +450,25 @@ fun InvoiceUploadDialog(
                         enabled = !isSaving && selectedProduct != null &&
                                 invoiceNumber.isNotBlank() &&
                                 sellerName.isNotBlank() &&
-                                totalAmount.toDoubleOrNull() != null &&
+                                purchaseDateIsValid && amountIsValid &&
                                 currentPreviewPath != null,
                         onClick = {
                             val prod = selectedProduct ?: return@Button
                             val parsedAmount = totalAmount.toDoubleOrNull() ?: return@Button
                             val filePath = currentPreviewPath ?: return@Button
 
-                            isSaving = true
-                            scope.launch {
-                                try {
-                                    val invoice = Invoice(
-                                        invoiceId = existingInvoice?.invoiceId ?: 0L,
-                                        productId = prod.productId,
-                                        invoiceNumber = invoiceNumber.trim(),
-                                        purchaseDate = purchaseDate.trim(),
-                                        sellerName = sellerName.trim(),
-                                        totalAmount = parsedAmount,
-                                        invoiceFileUri = filePath,
-                                        invoiceType = invoiceType,
-                                        createdAt = existingInvoice?.createdAt ?: System.currentTimeMillis()
-                                    )
-                                    onSaveSuccess(invoice)
-                                } catch (e: Exception) {
-                                    Toast.makeText(context, "Error saving: ${e.message}", Toast.LENGTH_SHORT).show()
-                                } finally {
-                                    isSaving = false
-                                }
-                            }
+                            val invoice = Invoice(
+                                invoiceId = existingInvoice?.invoiceId ?: 0L,
+                                productId = prod.productId,
+                                invoiceNumber = invoiceNumber.trim(),
+                                purchaseDate = purchaseDate.trim(),
+                                sellerName = sellerName.trim(),
+                                totalAmount = parsedAmount,
+                                invoiceFileUri = filePath,
+                                invoiceType = invoiceType,
+                                createdAt = existingInvoice?.createdAt ?: System.currentTimeMillis()
+                            )
+                            saveAfterDuplicateCheck(invoice) { onSaveSuccess(invoice) }
                         }
                     ) {
                         if (isSaving) {
@@ -457,13 +490,14 @@ fun InvoiceUploadDialog(
                 initialProduct = selectedProduct ?: initialProduct,
                 availableProducts = availableProducts,
                 onDismiss = { pendingOcrReview = null },
-                onConfirmSave = { inv, newProd ->
-                    scope.launch {
+                onConfirmSave = { inv, newProd, updatedExistingProduct ->
+                    saveAfterDuplicateCheck(inv) {
                         val finalProductId = if (newProd != null) {
                             app.productRepository.addProduct(newProd)
                         } else {
                             inv.productId
                         }
+                        updatedExistingProduct?.let { app.productRepository.updateProduct(it) }
                         val finalInvoice = inv.copy(productId = finalProductId)
                         pendingOcrReview = null
                         onSaveSuccess(finalInvoice)
@@ -471,6 +505,39 @@ fun InvoiceUploadDialog(
                 }
             )
         }
+    }
+
+    potentialDuplicate?.let { duplicate ->
+        AlertDialog(
+            onDismissRequest = {
+                potentialDuplicate = null
+                pendingDuplicateAction = null
+            },
+            title = { Text("Possible duplicate invoice") },
+            text = {
+                Text("Invoice ${duplicate.invoiceNumber} from ${duplicate.sellerName} on ${duplicate.purchaseDate} has matching details. Save this invoice anyway?")
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    val action = pendingDuplicateAction
+                    potentialDuplicate = null
+                    pendingDuplicateAction = null
+                    scope.launch {
+                        try {
+                            action?.invoke()
+                        } catch (error: Exception) {
+                            Toast.makeText(context, "Unable to save invoice: ${error.message}", Toast.LENGTH_LONG).show()
+                        }
+                    }
+                }) { Text("Save anyway") }
+            },
+            dismissButton = {
+                TextButton(onClick = {
+                    potentialDuplicate = null
+                    pendingDuplicateAction = null
+                }) { Text("Cancel") }
+            }
+        )
     }
 }
 

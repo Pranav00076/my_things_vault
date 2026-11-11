@@ -29,8 +29,16 @@ class InvoiceRepository(private val dao: InvoiceDao) {
     fun observeAllProductsWithInvoices(): Flow<List<ProductWithInvoices>> =
         dao.observeAllProductsWithInvoices()
 
-    fun searchInvoices(query: String): Flow<List<Invoice>> =
-        dao.searchInvoices(query)
+    fun searchInvoiceDetails(query: String, invoiceType: String?): Flow<List<InvoiceWithProduct>> =
+        dao.searchInvoiceDetails(query, invoiceType)
+
+    suspend fun findPotentialDuplicate(invoice: Invoice): Invoice? = dao.findPotentialDuplicate(
+        invoiceNumber = invoice.invoiceNumber,
+        sellerName = invoice.sellerName,
+        purchaseDate = invoice.purchaseDate,
+        totalAmount = invoice.totalAmount,
+        excludeInvoiceId = invoice.invoiceId
+    )
 
     suspend fun addInvoice(invoice: Invoice): Long = dao.insert(invoice)
 

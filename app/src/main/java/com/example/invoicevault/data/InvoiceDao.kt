@@ -53,13 +53,41 @@ interface InvoiceDao {
 
     @Query(
         """
-        SELECT * FROM invoices 
-        WHERE invoiceNumber LIKE '%' || :query || '%' 
-           OR sellerName LIKE '%' || :query || '%'
-        ORDER BY purchaseDate DESC, invoiceId DESC
+        SELECT * FROM invoices AS i
+        WHERE i.invoiceId != :excludeInvoiceId AND (
+            (trim(:invoiceNumber) != ''
+                AND lower(trim(i.invoiceNumber)) = lower(trim(:invoiceNumber))
+                AND lower(trim(i.sellerName)) = lower(trim(:sellerName)))
+            OR (lower(trim(i.sellerName)) = lower(trim(:sellerName))
+                AND i.purchaseDate = :purchaseDate
+                AND abs(i.totalAmount - :totalAmount) < 0.01)
+        )
+        ORDER BY i.purchaseDate DESC, i.invoiceId DESC
+        LIMIT 1
         """
     )
-    fun searchInvoices(query: String): Flow<List<Invoice>>
+    suspend fun findPotentialDuplicate(
+        invoiceNumber: String,
+        sellerName: String,
+        purchaseDate: String,
+        totalAmount: Double,
+        excludeInvoiceId: Long
+    ): Invoice?
+
+    @Transaction
+    @Query(
+        """
+        SELECT i.* FROM invoices AS i
+        INNER JOIN products AS p ON p.productId = i.productId
+        WHERE (:query = ''
+            OR i.invoiceNumber LIKE '%' || :query || '%'
+            OR i.sellerName LIKE '%' || :query || '%'
+            OR p.productName LIKE '%' || :query || '%')
+          AND (:invoiceType IS NULL OR i.invoiceType = :invoiceType)
+        ORDER BY i.purchaseDate DESC, i.invoiceType COLLATE NOCASE ASC, i.invoiceId DESC
+        """
+    )
+    fun searchInvoiceDetails(query: String, invoiceType: String?): Flow<List<InvoiceWithProduct>>
 
     @Transaction
     @Query("SELECT * FROM products WHERE productId = :productId LIMIT 1")
