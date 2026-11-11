@@ -81,12 +81,25 @@ fun InvoiceUploadDialog(
     var potentialDuplicate by remember { mutableStateOf<Invoice?>(null) }
     var pendingDuplicateAction by remember { mutableStateOf<(suspend () -> Unit)?>(null) }
 
-    val purchaseDateIsValid = remember(purchaseDate) {
-        runCatching { LocalDate.parse(purchaseDate.trim()) }.isSuccess
+    val normalizedPurchaseDate = remember(purchaseDate) {
+        if (runCatching { LocalDate.parse(purchaseDate.trim()) }.isSuccess) {
+            purchaseDate.trim()
+        } else {
+            InvoiceOcrProcessor.normalizeDate(purchaseDate.trim())
+        }
     }
-    val amountIsValid = remember(totalAmount) {
-        totalAmount.toDoubleOrNull()?.let { it.isFinite() && it >= 0.0 } == true
+    val purchaseDateIsValid = normalizedPurchaseDate != null
+
+    val parsedTotalAmount = remember(totalAmount) {
+        val direct = totalAmount.trim().toDoubleOrNull()
+        if (direct != null && direct.isFinite() && direct >= 0.0) {
+            direct
+        } else {
+            InvoiceOcrProcessor.cleanAndParseDouble(totalAmount.trim())
+                ?.takeIf { it.isFinite() && it >= 0.0 }
+        }
     }
+    val amountIsValid = parsedTotalAmount != null
 
     fun saveAfterDuplicateCheck(invoice: Invoice, proceed: suspend () -> Unit) {
         if (isSaving || potentialDuplicate != null) return
@@ -454,14 +467,15 @@ fun InvoiceUploadDialog(
                                 currentPreviewPath != null,
                         onClick = {
                             val prod = selectedProduct ?: return@Button
-                            val parsedAmount = totalAmount.toDoubleOrNull() ?: return@Button
+                            val parsedAmount = parsedTotalAmount ?: return@Button
+                            val finalDate = normalizedPurchaseDate ?: return@Button
                             val filePath = currentPreviewPath ?: return@Button
 
                             val invoice = Invoice(
                                 invoiceId = existingInvoice?.invoiceId ?: 0L,
                                 productId = prod.productId,
                                 invoiceNumber = invoiceNumber.trim(),
-                                purchaseDate = purchaseDate.trim(),
+                                purchaseDate = finalDate,
                                 sellerName = sellerName.trim(),
                                 totalAmount = parsedAmount,
                                 invoiceFileUri = filePath,
@@ -556,6 +570,7 @@ fun ProductInvoicesDialog(
     val scope = rememberCoroutineScope()
 
     val invoices by invoiceRepo.observeInvoicesForProduct(product.productId).collectAsState(initial = emptyList())
+    val allProducts by app.productRepository.products.collectAsState(initial = emptyList())
 
     var showUploadDialog by remember { mutableStateOf(false) }
     var editingInvoice by remember { mutableStateOf<Invoice?>(null) }
@@ -626,7 +641,7 @@ fun ProductInvoicesDialog(
     if (showUploadDialog) {
         InvoiceUploadDialog(
             initialProduct = product,
-            availableProducts = listOf(product),
+            availableProducts = allProducts.ifEmpty { listOf(product) },
             onDismiss = { showUploadDialog = false },
             onSaveSuccess = { newInvoice ->
                 scope.launch {
@@ -641,7 +656,7 @@ fun ProductInvoicesDialog(
     editingInvoice?.let { inv ->
         InvoiceUploadDialog(
             initialProduct = product,
-            availableProducts = listOf(product),
+            availableProducts = allProducts.ifEmpty { listOf(product) },
             existingInvoice = inv,
             onDismiss = { editingInvoice = null },
             onSaveSuccess = { updated ->

@@ -156,9 +156,33 @@ This is a collaborative 3-member major project structured around a unified relat
 
 ## Step 5: Smart Invoice Processing
 
-- ML Kit extracts invoice number, date, seller, product name, total amount and available warranty duration from invoice images or the first page of a PDF. Extracted fields remain editable in the verification dialog.
-- Dates are checked as real ISO `yyyy-MM-dd` calendar dates. Amounts must be finite and non-negative. A verified warranty duration must be a non-negative whole number of months.
-- Before saving, the app checks for a possible duplicate using normalized invoice number and seller, plus seller/date/amount as a secondary signal. It shows the matching invoice and lets the user cancel or save anyway.
-- OCR product names are matched case-insensitively to existing products. The user can select a different product or create a new shared `Product` record.
-- The invoice browser searches product name, seller and invoice number; it filters by invoice type and sorts by purchase date (newest first), then category.
-- Warranty duration and narrative are passed to the shared `Product` record only after explicit verification. The app does not create a separate warranty management system; Member 3 can consume `Product.warrantyDuration`, `Product.warrantyUnit` and the product description in the existing shared workflow.
+A complete smart processing workflow was implemented to validate, de-duplicate, organize, and associate invoices across modules:
+
+### 1. Automatic Field Extraction & Smart Parsing
+- Google ML Kit Text Recognition with 2D spatial layout analysis extracts:
+  - **Invoice Number** (with table-row alignment and label fallback)
+  - **Purchase Date** (multi-format parsing normalized to ISO `yyyy-MM-dd`)
+  - **Seller / Merchant Name** (payee note detection and multi-line business header merging)
+  - **Product Name** (header matching and item keywords)
+  - **Total Amount** (space- and comma-tolerant numeric parser, with fallback to largest invoice amount)
+  - **Warranty Duration** (duration in months from warranty terms)
+
+### 2. Strict Date & Amount Validation
+- **Date Validation**: Validates real calendar dates with tolerant multi-format normalization (`yyyy-MM-dd`, `MM/dd/yyyy`, `dd-MM-yyyy`, etc.) before persistence.
+- **Amount Validation**: Enforces finite, non-negative amounts (`totalAmount >= 0.0`) and strips formatting artifacts (currency symbols, space/comma separators).
+
+### 3. Duplicate Invoice Detection
+- Evaluates incoming invoices against existing database records prior to saving:
+  - **Primary Signal**: Case-insensitive match on normalized `invoiceNumber` + `sellerName`.
+  - **Secondary Signal**: Match on `sellerName` + `purchaseDate` + `totalAmount` (within $0.01 tolerance) for invoices where the invoice number was omitted or unclear.
+- If a duplicate is detected, an alert dialog appears displaying the existing invoice details and prompts the user to either **"Save anyway"** or **"Cancel"**.
+
+### 4. Shared Warranty Workflow Integration
+- When warranty information is detected or entered, verified warranty months and descriptions are saved directly into the shared `Product` record (`warrantyDuration`, `warrantyUnit`, `productDescription`).
+- **No Duplicate Systems**: Does not create a competing warranty database. Member 3 can consume `Product.warrantyDuration` and `Product.purchaseDate` directly.
+
+### 5. Invoice Search & Categorized Browser
+- Top-level **"Search invoices"** action on the home dashboard opens the `InvoiceBrowserDialog`.
+- Search query matches against `productName`, `category`, `sellerName`, and `invoiceNumber`.
+- Invoices are organized chronologically (`purchaseDate DESC`) and by invoice category (`invoiceType`).
+- Includes document thumbnail previews and single-tap full document inspection.

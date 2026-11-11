@@ -78,22 +78,37 @@ fun OcrReviewDialog(
     var warrantyMonths by remember {
         mutableStateOf(ocrData.warrantyDurationMonths.value?.toString().orEmpty())
     }
-    var warrantyVerified by remember { mutableStateOf(false) }
+    var warrantyVerified by remember(ocrData.warrantyDurationMonths.value) {
+        mutableStateOf(ocrData.warrantyDurationMonths.value != null)
+    }
     var invoiceType by remember { mutableStateOf(InvoiceTypes.TAX_INVOICE) }
 
     var expandedTypeDropdown by remember { mutableStateOf(false) }
     var expandedProductDropdown by remember { mutableStateOf(false) }
     var showRawText by remember { mutableStateOf(false) }
 
-    val dateIsValid = remember(purchaseDate) {
-        runCatching { LocalDate.parse(purchaseDate.trim()) }.isSuccess
+    val normalizedPurchaseDate = remember(purchaseDate) {
+        if (runCatching { LocalDate.parse(purchaseDate.trim()) }.isSuccess) {
+            purchaseDate.trim()
+        } else {
+            com.example.invoicevault.ocr.InvoiceOcrProcessor.normalizeDate(purchaseDate.trim())
+        }
     }
-    val amountIsValid = remember(totalAmount) {
-        val parsed = totalAmount.toDoubleOrNull()
-        parsed != null && parsed.isFinite() && parsed >= 0.0
+    val dateIsValid = normalizedPurchaseDate != null
+
+    val parsedTotalAmount = remember(totalAmount) {
+        val direct = totalAmount.trim().toDoubleOrNull()
+        if (direct != null && direct.isFinite() && direct >= 0.0) {
+            direct
+        } else {
+            com.example.invoicevault.ocr.InvoiceOcrProcessor.cleanAndParseDouble(totalAmount.trim())
+                ?.takeIf { it.isFinite() && it >= 0.0 }
+        }
     }
+    val amountIsValid = parsedTotalAmount != null
+
     val warrantyIsValid = remember(warrantyMonths, warrantyVerified) {
-        !warrantyVerified || (warrantyMonths.toIntOrNull()?.let { it >= 0 } == true)
+        !warrantyVerified || warrantyMonths.isBlank() || (warrantyMonths.toIntOrNull()?.let { it >= 0 } == true)
     }
     val canSave = remember(selectedExistingProduct, createNewProduct, productName, invoiceNumber, sellerName, dateIsValid, amountIsValid, warrantyIsValid) {
         val hasProduct = (createNewProduct && productName.isNotBlank()) || (!createNewProduct && selectedExistingProduct != null)
@@ -310,7 +325,12 @@ fun OcrReviewDialog(
                 // Warranty Duration Field
                 OutlinedTextField(
                     value = warrantyMonths,
-                    onValueChange = { warrantyMonths = it },
+                    onValueChange = {
+                        warrantyMonths = it
+                        if (it.isNotBlank() && it.toIntOrNull() != null) {
+                            warrantyVerified = true
+                        }
+                    },
                     label = { Text("Warranty Duration (months)") },
                     isError = warrantyVerified && !warrantyIsValid,
                     supportingText = {
@@ -406,7 +426,8 @@ fun OcrReviewDialog(
                     Button(
                         enabled = canSave,
                         onClick = {
-                            val parsedAmount = totalAmount.toDoubleOrNull() ?: 0.0
+                            val parsedAmount = parsedTotalAmount ?: 0.0
+                            val finalPurchaseDate = normalizedPurchaseDate ?: purchaseDate.trim()
                             val parsedWarranty = if (warrantyVerified) warrantyMonths.toIntOrNull() ?: 0 else 0
                             val verifiedWarrantyDescription = ocrData.warrantyDescription
                                 ?.takeIf { warrantyVerified && it.isNotBlank() }
@@ -417,7 +438,7 @@ fun OcrReviewDialog(
                                     productName = productName.trim(),
                                     brand = sellerName.trim(),
                                     category = "General",
-                                    purchaseDate = purchaseDate.trim(),
+                                    purchaseDate = finalPurchaseDate,
                                     purchasePrice = parsedAmount,
                                     sellerName = sellerName.trim(),
                                     productDescription = buildString {
@@ -448,7 +469,7 @@ fun OcrReviewDialog(
                                 invoiceId = 0L,
                                 productId = selectedExistingProduct?.productId ?: 0L,
                                 invoiceNumber = invoiceNumber.trim(),
-                                purchaseDate = purchaseDate.trim(),
+                                purchaseDate = finalPurchaseDate,
                                 sellerName = sellerName.trim(),
                                 totalAmount = parsedAmount,
                                 invoiceFileUri = filePath,

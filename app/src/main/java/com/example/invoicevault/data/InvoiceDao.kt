@@ -56,9 +56,11 @@ interface InvoiceDao {
         SELECT * FROM invoices AS i
         WHERE i.invoiceId != :excludeInvoiceId AND (
             (trim(:invoiceNumber) != ''
+                AND trim(:sellerName) != ''
                 AND lower(trim(i.invoiceNumber)) = lower(trim(:invoiceNumber))
                 AND lower(trim(i.sellerName)) = lower(trim(:sellerName)))
-            OR (lower(trim(i.sellerName)) = lower(trim(:sellerName))
+            OR (trim(:sellerName) != ''
+                AND lower(trim(i.sellerName)) = lower(trim(:sellerName))
                 AND i.purchaseDate = :purchaseDate
                 AND abs(i.totalAmount - :totalAmount) < 0.01)
         )
@@ -82,7 +84,8 @@ interface InvoiceDao {
         WHERE (:query = ''
             OR i.invoiceNumber LIKE '%' || :query || '%'
             OR i.sellerName LIKE '%' || :query || '%'
-            OR p.productName LIKE '%' || :query || '%')
+            OR p.productName LIKE '%' || :query || '%'
+            OR p.category LIKE '%' || :query || '%')
           AND (:invoiceType IS NULL OR i.invoiceType = :invoiceType)
         ORDER BY i.purchaseDate DESC, i.invoiceType COLLATE NOCASE ASC, i.invoiceId DESC
         """

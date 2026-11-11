@@ -287,7 +287,7 @@ object InvoiceOcrProcessor {
         return extractDateFromText(text) != null
     }
 
-    private fun normalizeDate(rawDate: String): String? {
+    fun normalizeDate(rawDate: String): String? {
         // Clean characters: replace dots and slashes with dashes
         val clean = rawDate.trim()
             .replace('/', '-')
@@ -544,7 +544,7 @@ object InvoiceOcrProcessor {
         return cleanAndParseDouble(match.groupValues[1])
     }
 
-    private fun cleanAndParseDouble(raw: String): Double? {
+    fun cleanAndParseDouble(raw: String): Double? {
         // Remove spaces (French/international thousands separator: "1 650.00" -> "1650.00") and commas
         val clean = raw.trim().replace(" ", "").replace(",", "")
         return clean.toDoubleOrNull()
