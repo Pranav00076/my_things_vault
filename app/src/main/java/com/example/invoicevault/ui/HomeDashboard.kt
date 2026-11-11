@@ -57,6 +57,7 @@ fun HomeDashboard(repository: ProductRepository) {
     var deletingProduct by remember { mutableStateOf<Product?>(null) }
     var managingInvoicesProduct by remember { mutableStateOf<Product?>(null) }
     var showUploadInvoiceDialog by remember { mutableStateOf(false) }
+    var showInvoiceBrowser by remember { mutableStateOf(false) }
 
     Column(Modifier.fillMaxSize().padding(20.dp)) {
         Text("Invoice Vault", style = MaterialTheme.typography.headlineMedium)
@@ -69,6 +70,9 @@ fun HomeDashboard(repository: ProductRepository) {
                 enabled = products.isNotEmpty()
             ) {
                 Text("Upload invoice")
+            }
+            OutlinedButton(onClick = { showInvoiceBrowser = true }, enabled = invoiceCount > 0) {
+                Text("Search invoices")
             }
         }
         Spacer(Modifier.height(20.dp))
@@ -137,6 +141,10 @@ fun HomeDashboard(repository: ProductRepository) {
                 }
             }
         )
+    }
+
+    if (showInvoiceBrowser) {
+        InvoiceBrowserDialog(repository = invoiceRepo, onDismiss = { showInvoiceBrowser = false })
     }
 }
 

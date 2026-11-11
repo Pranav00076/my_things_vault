@@ -39,16 +39,24 @@ fun OcrReviewDialog(
     initialProduct: Product? = null,
     availableProducts: List<Product> = emptyList(),
     onDismiss: () -> Unit,
-    onConfirmSave: (Invoice, Product?) -> Unit
+    onConfirmSave: (Invoice, Product?, Product?) -> Unit
 ) {
     val context = LocalContext.current
+    val ocrProductName = ocrData.productName.value?.trim()
+    val matchedProduct = remember(availableProducts, ocrProductName) {
+        ocrProductName?.takeIf { it.isNotBlank() }?.let { detectedName ->
+            availableProducts.firstOrNull {
+                it.productName.trim().equals(detectedName, ignoreCase = true)
+            }
+        }
+    }
 
     // Product Selection / Creation state
     var createNewProduct by remember {
-        mutableStateOf(initialProduct == null && (availableProducts.isEmpty() || ocrData.productName.value != null))
+        mutableStateOf(initialProduct == null && matchedProduct == null)
     }
     var selectedExistingProduct by remember {
-        mutableStateOf(initialProduct ?: availableProducts.firstOrNull())
+        mutableStateOf(initialProduct ?: matchedProduct ?: availableProducts.firstOrNull())
     }
 
     // Editable Field states (pre-populated from OCR)
@@ -68,8 +76,9 @@ fun OcrReviewDialog(
         mutableStateOf(ocrData.totalAmount.value?.toString() ?: initialProduct?.purchasePrice?.toString().orEmpty())
     }
     var warrantyMonths by remember {
-        mutableStateOf(ocrData.warrantyDurationMonths.value?.toString() ?: initialProduct?.warrantyDuration?.toString() ?: "12")
+        mutableStateOf(ocrData.warrantyDurationMonths.value?.toString().orEmpty())
     }
+    var warrantyVerified by remember { mutableStateOf(false) }
     var invoiceType by remember { mutableStateOf(InvoiceTypes.TAX_INVOICE) }
 
     var expandedTypeDropdown by remember { mutableStateOf(false) }
@@ -81,11 +90,14 @@ fun OcrReviewDialog(
     }
     val amountIsValid = remember(totalAmount) {
         val parsed = totalAmount.toDoubleOrNull()
-        parsed != null && parsed >= 0.0
+        parsed != null && parsed.isFinite() && parsed >= 0.0
     }
-    val canSave = remember(selectedExistingProduct, createNewProduct, productName, invoiceNumber, sellerName, dateIsValid, amountIsValid) {
+    val warrantyIsValid = remember(warrantyMonths, warrantyVerified) {
+        !warrantyVerified || (warrantyMonths.toIntOrNull()?.let { it >= 0 } == true)
+    }
+    val canSave = remember(selectedExistingProduct, createNewProduct, productName, invoiceNumber, sellerName, dateIsValid, amountIsValid, warrantyIsValid) {
         val hasProduct = (createNewProduct && productName.isNotBlank()) || (!createNewProduct && selectedExistingProduct != null)
-        hasProduct && invoiceNumber.isNotBlank() && sellerName.isNotBlank() && dateIsValid && amountIsValid
+        hasProduct && invoiceNumber.isNotBlank() && sellerName.isNotBlank() && dateIsValid && amountIsValid && warrantyIsValid
     }
 
     Dialog(
@@ -300,15 +312,28 @@ fun OcrReviewDialog(
                     value = warrantyMonths,
                     onValueChange = { warrantyMonths = it },
                     label = { Text("Warranty Duration (months)") },
+                    isError = warrantyVerified && !warrantyIsValid,
                     supportingText = {
-                        FieldConfidenceTag(
-                            ocrData.warrantyDurationMonths.confidence,
-                            ocrData.warrantyDescription ?: ocrData.warrantyDurationMonths.explanation
-                        )
+                        Column {
+                            FieldConfidenceTag(
+                                ocrData.warrantyDurationMonths.confidence,
+                                ocrData.warrantyDescription ?: ocrData.warrantyDurationMonths.explanation
+                            )
+                            if (warrantyVerified && !warrantyIsValid) {
+                                Text("Enter a whole number of months", color = MaterialTheme.colorScheme.error)
+                            }
+                            if (!ocrData.warrantyDescription.isNullOrBlank()) {
+                                Text(ocrData.warrantyDescription, style = MaterialTheme.typography.bodySmall)
+                            }
+                        }
                     },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()
                 )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Checkbox(checked = warrantyVerified, onCheckedChange = { warrantyVerified = it })
+                    Text("I verified the warranty information against the invoice")
+                }
 
                 Spacer(Modifier.height(8.dp))
 
@@ -382,7 +407,9 @@ fun OcrReviewDialog(
                         enabled = canSave,
                         onClick = {
                             val parsedAmount = totalAmount.toDoubleOrNull() ?: 0.0
-                            val parsedWarranty = warrantyMonths.toIntOrNull() ?: 0
+                            val parsedWarranty = if (warrantyVerified) warrantyMonths.toIntOrNull() ?: 0 else 0
+                            val verifiedWarrantyDescription = ocrData.warrantyDescription
+                                ?.takeIf { warrantyVerified && it.isNotBlank() }
 
                             val newProduct: Product? = if (createNewProduct) {
                                 Product(
@@ -393,10 +420,28 @@ fun OcrReviewDialog(
                                     purchaseDate = purchaseDate.trim(),
                                     purchasePrice = parsedAmount,
                                     sellerName = sellerName.trim(),
-                                    productDescription = "Created from invoice ${invoiceNumber.trim()}",
+                                    productDescription = buildString {
+                                        append("Created from invoice ${invoiceNumber.trim()}")
+                                        verifiedWarrantyDescription?.let { append("\nWarranty details: $it") }
+                                    },
                                     warrantyDuration = parsedWarranty,
                                     warrantyUnit = WarrantyUnit.MONTHS
                                 )
+                            } else null
+
+                            val updatedExistingProduct = if (warrantyVerified && !createNewProduct) {
+                                selectedExistingProduct?.let { product ->
+                                    product.copy(
+                                        warrantyDuration = parsedWarranty,
+                                        warrantyUnit = WarrantyUnit.MONTHS,
+                                        productDescription = buildString {
+                                            append(product.productDescription)
+                                            verifiedWarrantyDescription?.let { details ->
+                                                if (!contains(details)) append("\nWarranty details: $details")
+                                            }
+                                        }.trim()
+                                    )
+                                }
                             } else null
 
                             val invoice = Invoice(
@@ -411,7 +456,7 @@ fun OcrReviewDialog(
                                 createdAt = System.currentTimeMillis()
                             )
 
-                            onConfirmSave(invoice, newProduct)
+                            onConfirmSave(invoice, newProduct, updatedExistingProduct)
                         }
                     ) {
                         Text("Confirm & Save Invoice")

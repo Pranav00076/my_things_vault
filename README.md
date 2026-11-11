@@ -153,3 +153,12 @@ This is a collaborative 3-member major project structured around a unified relat
    - Link the invoice to an existing registered product or check **"Create New Product"** to register a new product record simultaneously.
    - Tap **"Confirm & Save Invoice"**.
    - Verify that the invoice is saved in Room database, the document is safely archived in private storage, and the dashboard metrics update!
+
+## Step 5: Smart Invoice Processing
+
+- ML Kit extracts invoice number, date, seller, product name, total amount and available warranty duration from invoice images or the first page of a PDF. Extracted fields remain editable in the verification dialog.
+- Dates are checked as real ISO `yyyy-MM-dd` calendar dates. Amounts must be finite and non-negative. A verified warranty duration must be a non-negative whole number of months.
+- Before saving, the app checks for a possible duplicate using normalized invoice number and seller, plus seller/date/amount as a secondary signal. It shows the matching invoice and lets the user cancel or save anyway.
+- OCR product names are matched case-insensitively to existing products. The user can select a different product or create a new shared `Product` record.
+- The invoice browser searches product name, seller and invoice number; it filters by invoice type and sorts by purchase date (newest first), then category.
+- Warranty duration and narrative are passed to the shared `Product` record only after explicit verification. The app does not create a separate warranty management system; Member 3 can consume `Product.warrantyDuration`, `Product.warrantyUnit` and the product description in the existing shared workflow.
